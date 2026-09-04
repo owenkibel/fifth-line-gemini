@@ -2,7 +2,7 @@
 import { GoogleGenAI, HarmCategory, HarmBlockThreshold } from "@google/genai";
 import { NextResponse } from "next/server";
 
-const apiKey = process.env.GEMINI_API_KEY;
+const apiKey = process.env.GEMINI_API_KEY1;
 const MODEL_NAME = "gemini-3.8-flash";
 
 export async function POST(req: Request) {
