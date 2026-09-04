@@ -11,25 +11,31 @@ interface LimerickLine {
   rhymeToken: string;
 }
 
+interface MediaPrompts {
+  keyframePrompt: string;
+  motionPrompt: string;
+  artDirectedVersePrompt: string;
+}
+
 interface LimerickData {
   title: string;
   lines: LimerickLine[];
   meterCompliant: boolean;
   humorSummary: string;
-  model?: string; // <-- Add optional model field
+  model?: string;
+  mediaPrompts?: MediaPrompts;
 }
 
 interface SavedLimerick extends LimerickData {
   id: string;
   topic: string;
   afterHours: boolean;
-  model: string; // <-- Add model to stored record
+  model: string;
   createdAt: string;
 }
 
 const STORAGE_KEY = "fifth_line_gemini_history";
 
-// Resilient ID generator for both HTTPS and LAN HTTP environments
 function generateId(): string {
   if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
     return crypto.randomUUID();
@@ -50,10 +56,11 @@ export default function LimerickGenerator() {
   const [topic, setTopic] = useState("");
   const [afterHours, setAfterHours] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [visualizing, setVisualizing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [currentPoem, setCurrentPoem] = useState<SavedLimerick | null>(null);
   const [history, setHistory] = useState<SavedLimerick[]>([]);
-  const [copied, setCopied] = useState(false);
+  const [copiedKey, setCopiedKey] = useState<string | null>(null);
 
   useEffect(() => {
     try {
@@ -70,32 +77,47 @@ export default function LimerickGenerator() {
     }
   }, []);
 
+  function updateRecordInHistory(updatedRecord: SavedLimerick) {
+    setCurrentPoem(updatedRecord);
+    setHistory((prev) => {
+      const next = prev.map((item) =>
+        item.id === updatedRecord.id ? updatedRecord : item
+      );
+      try {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+      } catch (e) {
+        console.error("Failed to update localStorage", e);
+      }
+      return next;
+    });
+  }
+
   function saveToHistory(
-  poemData: LimerickData,
-  promptTopic: string,
-  isAfterHours: boolean
-): SavedLimerick {
-  const record: SavedLimerick = {
-    ...poemData,
-    id: generateId(),
-    topic: promptTopic,
-    afterHours: isAfterHours,
-    model: poemData.model || "gemini-3.8-flash", // <-- Persist model
-    createdAt: new Date().toISOString(),
-  };
+    poemData: LimerickData,
+    promptTopic: string,
+    isAfterHours: boolean
+  ): SavedLimerick {
+    const record: SavedLimerick = {
+      ...poemData,
+      id: generateId(),
+      topic: promptTopic,
+      afterHours: isAfterHours,
+      model: poemData.model || "gemini-3.8-flash",
+      createdAt: new Date().toISOString(),
+    };
 
-  setHistory((prev) => {
-    const updated = [record, ...prev].slice(0, 100);
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
-    } catch (e) {
-      console.error("Failed to save to localStorage", e);
-    }
-    return updated;
-  });
+    setHistory((prev) => {
+      const updated = [record, ...prev].slice(0, 100);
+      try {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
+      } catch (e) {
+        console.error("Failed to save to localStorage", e);
+      }
+      return updated;
+    });
 
-  return record;
-}
+    return record;
+  }
 
   async function generatePoem(e: React.FormEvent) {
     e.preventDefault();
@@ -112,7 +134,6 @@ export default function LimerickGenerator() {
       });
 
       const result = await res.json();
-
       if (!res.ok) {
         throw new Error(result.details || result.error || "Generation failed");
       }
@@ -126,30 +147,85 @@ export default function LimerickGenerator() {
     }
   }
 
+  async function generateVisuals(poem: SavedLimerick) {
+    setVisualizing(true);
+    setError(null);
+
+    try {
+      const res = await fetch("/api/visualize", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title: poem.title,
+          limerick: poem.lines.map((l) => l.text).join("\n"),
+          punchline: poem.humorSummary,
+        }),
+      });
+
+      const result = await res.json();
+      if (!res.ok) {
+        throw new Error(result.details || result.error || "Visualization failed");
+      }
+
+      const updatedRecord: SavedLimerick = {
+        ...poem,
+        mediaPrompts: result,
+      };
+
+      updateRecordInHistory(updatedRecord);
+    } catch (err: any) {
+      setError(err.message || "Failed to generate visual prompts.");
+    } finally {
+      setVisualizing(false);
+    }
+  }
+
   function getCleanText(poem: SavedLimerick): string {
     const lines = poem.lines.map((l) => l.text).join("\n");
     return `${poem.title}\n\n${lines}`;
   }
 
-  async function copyToClipboard(poem: SavedLimerick) {
+  async function copyText(text: string, key: string) {
     try {
-      await navigator.clipboard.writeText(getCleanText(poem));
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
+      await navigator.clipboard.writeText(text);
+      setCopiedKey(key);
+      setTimeout(() => setCopiedKey(null), 2000);
     } catch (err) {
       console.error("Clipboard write failed", err);
     }
   }
 
-function generateMarkdown(poem: SavedLimerick): string {
-  const body = poem.lines.map((l) => l.text).join("\n");
-  const syllables = poem.lines.map((l) => l.syllableCount).join(", ");
-  const safeTitle = poem.title.replace(/"/g, '\\"');
-  const safeTopic = poem.topic.replace(/"/g, '\\"');
-  const safePunchline = poem.humorSummary.replace(/"/g, '\\"');
-  const modelUsed = poem.model || "gemini-3.8-flash";
+  function generateMarkdown(poem: SavedLimerick): string {
+    const body = poem.lines.map((l) => l.text).join("\n");
+    const syllables = poem.lines.map((l) => l.syllableCount).join(", ");
+    const safeTitle = poem.title.replace(/"/g, '\\"');
+    const safeTopic = poem.topic.replace(/"/g, '\\"');
+    const safePunchline = poem.humorSummary.replace(/"/g, '\\"');
+    const modelUsed = poem.model || "gemini-3.8-flash";
 
-  return `---
+    let visualSection = "";
+    if (poem.mediaPrompts) {
+      visualSection = `
+## Generative Media Prompts
+
+### Text-to-Image Keyframe
+\`\`\`
+${poem.mediaPrompts.keyframePrompt}
+\`\`\`
+
+### Image-to-Video Motion
+\`\`\`
+${poem.mediaPrompts.motionPrompt}
+\`\`\`
+
+### Direct Video (Art-Directed Verse)
+\`\`\`
+${poem.mediaPrompts.artDirectedVersePrompt}
+\`\`\`
+`;
+    }
+
+    return `---
 title: "${safeTitle}"
 date: "${poem.createdAt}"
 topic: "${safeTopic}"
@@ -164,8 +240,8 @@ tags:
 ---
 
 ${body}
-`;
-}
+${visualSection}`;
+  }
 
   function downloadSingleMarkdown(poem: SavedLimerick) {
     const content = generateMarkdown(poem);
@@ -211,7 +287,7 @@ ${body}
       <header className="mb-8">
         <h1 className="text-3xl font-bold tracking-tight">Fifth Line: Gemini Edition</h1>
         <p className="text-sm text-zinc-500 mt-1">
-          Anapestic limerick generator with prosody telemetry and local archival.
+          Anapestic limerick engine with prosody telemetry and media prompt staging.
         </p>
       </header>
 
@@ -292,12 +368,12 @@ ${body}
             Punchline: {currentPoem.humorSummary}
           </p>
 
-          <div className="flex flex-wrap gap-2 pt-2">
+          <div className="flex flex-wrap gap-2 pt-2 border-t border-zinc-200 dark:border-zinc-800 mb-6">
             <button
-              onClick={() => copyToClipboard(currentPoem)}
+              onClick={() => copyText(getCleanText(currentPoem), "poem")}
               className="px-3 py-1.5 text-xs font-medium rounded-md border border-zinc-300 dark:border-zinc-700 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition"
             >
-              {copied ? "Copied Clean Text!" : "Copy Poem"}
+              {copiedKey === "poem" ? "Copied Verse!" : "Copy Poem"}
             </button>
             <button
               onClick={() => downloadSingleMarkdown(currentPoem)}
@@ -305,10 +381,88 @@ ${body}
             >
               Export .md
             </button>
+            <button
+              onClick={() => generateVisuals(currentPoem)}
+              disabled={visualizing}
+              className="px-3 py-1.5 text-xs font-medium rounded-md bg-blue-50 dark:bg-blue-950/40 text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-900 hover:bg-blue-100 dark:hover:bg-blue-900/60 transition disabled:opacity-50"
+            >
+              {visualizing
+                ? "Directing Media Prompts..."
+                : currentPoem.mediaPrompts
+                ? "Regenerate Media Prompts"
+                : "Stage Visual & Video Prompts"}
+            </button>
           </div>
+
+          {/* Visual Prompts Display */}
+          {currentPoem.mediaPrompts && (
+            <div className="mt-4 pt-4 border-t border-zinc-200 dark:border-zinc-800 space-y-4">
+              <h3 className="text-xs font-semibold uppercase tracking-wider text-zinc-500">
+                Media Staging (T2I / I2V / T2V)
+              </h3>
+
+              {/* T2I Keyframe */}
+              <div className="rounded-lg bg-zinc-100/60 dark:bg-zinc-800/40 p-3 text-xs">
+                <div className="flex justify-between items-center mb-1 text-zinc-500">
+                  <span className="font-semibold">Keyframe Prompt (T2I / Start Frame)</span>
+                  <button
+                    onClick={() =>
+                      copyText(currentPoem.mediaPrompts!.keyframePrompt, "t2i")
+                    }
+                    className="hover:underline text-blue-600 dark:text-blue-400"
+                  >
+                    {copiedKey === "t2i" ? "Copied!" : "Copy"}
+                  </button>
+                </div>
+                <p className="font-mono text-zinc-700 dark:text-zinc-300 select-all">
+                  {currentPoem.mediaPrompts.keyframePrompt}
+                </p>
+              </div>
+
+              {/* I2V Motion */}
+              <div className="rounded-lg bg-zinc-100/60 dark:bg-zinc-800/40 p-3 text-xs">
+                <div className="flex justify-between items-center mb-1 text-zinc-500">
+                  <span className="font-semibold">Motion Directive (I2V / Camera & Physics)</span>
+                  <button
+                    onClick={() =>
+                      copyText(currentPoem.mediaPrompts!.motionPrompt, "i2v")
+                    }
+                    className="hover:underline text-blue-600 dark:text-blue-400"
+                  >
+                    {copiedKey === "i2v" ? "Copied!" : "Copy"}
+                  </button>
+                </div>
+                <p className="font-mono text-zinc-700 dark:text-zinc-300 select-all">
+                  {currentPoem.mediaPrompts.motionPrompt}
+                </p>
+              </div>
+
+              {/* T2V Art-Directed Verse */}
+              <div className="rounded-lg bg-zinc-100/60 dark:bg-zinc-800/40 p-3 text-xs">
+                <div className="flex justify-between items-center mb-1 text-zinc-500">
+                  <span className="font-semibold">Art-Directed Verse (Direct T2V)</span>
+                  <button
+                    onClick={() =>
+                      copyText(
+                        currentPoem.mediaPrompts!.artDirectedVersePrompt,
+                        "t2v"
+                      )
+                    }
+                    className="hover:underline text-blue-600 dark:text-blue-400"
+                  >
+                    {copiedKey === "t2v" ? "Copied!" : "Copy"}
+                  </button>
+                </div>
+                <p className="font-mono text-zinc-700 dark:text-zinc-300 select-all">
+                  {currentPoem.mediaPrompts.artDirectedVersePrompt}
+                </p>
+              </div>
+            </div>
+          )}
         </article>
       )}
 
+      {/* History Archive */}
       {history.length > 0 && (
         <section className="border-t border-zinc-200 dark:border-zinc-800 pt-8">
           <div className="flex justify-between items-center mb-4">
@@ -350,6 +504,11 @@ ${body}
                   <span className="text-zinc-400 text-xs truncate">"{poem.topic}"</span>
                 </div>
                 <div className="flex items-center gap-2 shrink-0">
+                  {poem.mediaPrompts && (
+                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-100 dark:bg-blue-950/60 text-blue-700 dark:text-blue-300 font-medium">
+                      Visualized
+                    </span>
+                  )}
                   {poem.afterHours && (
                     <span className="text-[10px] px-1.5 py-0.5 rounded bg-purple-100 dark:bg-purple-950/60 text-purple-700 dark:text-purple-300 font-medium">
                       After Hours
