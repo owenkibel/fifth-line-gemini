@@ -33,7 +33,7 @@ export default function RootLayout({
 
         <footer className="py-8 border-t border-zinc-200 dark:border-zinc-800 text-center text-xs text-zinc-500">
           <p className="flex items-center justify-center gap-1">
-            <span>Fifth Line (Gemini Edition) •</span>
+            <span>Fifth Line - Gemini Edition - Fifth Line Press, 2026 - Developed by Owen Kibel in conversation with Gemini 3.8 Flash Extended Thinking - Source is MIT-licensed - </span>
             <a
               href="https://github.com/owenkibel/fifth-line-gemini"
               target="_blank"
